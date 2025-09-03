@@ -1,0 +1,224 @@
+const dbPool = require('../../config/database');
+const { successResponse, errorResponse } = require('../../utils/response');
+
+const handleDatabaseOperation = async (operation, res, errorMsg) => {
+    try {
+        const result = await operation();
+        return result;
+    } catch (error) {
+        return errorResponse(res, errorMsg, error);
+    }
+};
+
+const getAllPolishing = (req, res) =>
+    handleDatabaseOperation(
+        async () => {
+            const [data] = await dbPool.query('SELECT * FROM table_monitoring_polishing');
+            return successResponse(res, "Data polishing berhasil diambil", data);
+        },
+        res,
+        "Terjadi kesalahan pada server"
+    );
+
+const getPolishingById = (req, res) => {
+    const { id } = req.params;
+    return handleDatabaseOperation(
+        async () => {
+            const [data] = await dbPool.execute('SELECT * FROM table_monitoring_polishing WHERE id = ?', [id]);
+            if (data.length === 0) {
+                return errorResponse(res, `Polishing dengan ID ${id} tidak ditemukan`, null, 404);
+            }
+            return successResponse(res, "Data polishing berhasil diambil", data[0]);
+        },
+        res,
+        `Terjadi kesalahan pada server saat mengambil polishing ID ${id}`
+    );
+};
+
+const createPolishing = async (req, res) => {
+    const data = req.body;
+    const isArray = Array.isArray(data);
+
+    // Validasi field wajib
+    const requiredFields = ['id_list_table', 'id_form', 'shift', 'group', 'output', 'capacity_filling', 'polishing_filter1', 'polishing_filter2', 'condition_filter', 'description', 'pic', 'standard'];
+
+    const validateItem = (item) => {
+        return requiredFields.every(field => {
+            if (field === 'date') return item[field] !== undefined; // date bisa null
+            return item[field] !== undefined && item[field] !== null && item[field] !== '';
+        });
+    };
+
+    if ((isArray && data.some(item => !validateItem(item))) || (!isArray && !validateItem(data))) {
+        return errorResponse(res, "Bad Request: Semua field wajib harus diisi", null, 400);
+    }
+
+    return handleDatabaseOperation(
+        async () => {
+            const SQLQuery = isArray
+                ? 'INSERT INTO table_monitoring_polishing (id_list_table, id_form, date, shift, group, output, capacity_filling, polishing_filter1, polishing_filter2, condition_filter, description, pic, standard) VALUES ?'
+                : 'INSERT INTO table_monitoring_polishing (id_list_table, id_form, date, shift, group, output, capacity_filling, polishing_filter1, polishing_filter2, condition_filter, description, pic, standard) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+
+            const values = isArray
+                ? [data.map(item => [item.id_list_table, item.id_form, item.date || null, item.shift, item.group, item.output, item.capacity_filling, item.polishing_filter1, item.polishing_filter2, item.condition_filter, item.description, item.pic, item.standard])]
+                : [data.id_list_table, data.id_form, data.date || null, data.shift, data.group, data.output, data.capacity_filling, data.polishing_filter1, data.polishing_filter2, data.condition_filter, data.description, data.pic, data.standard];
+
+            await (isArray ? dbPool.query(SQLQuery, values) : dbPool.execute(SQLQuery, values));
+            return successResponse(res, `${isArray ? 'Beberapa' : ''} data polishing berhasil dibuat`, data, 201);
+        },
+        res,
+        `Terjadi kesalahan pada server saat membuat ${isArray ? 'banyak ' : ''}data polishing`
+    );
+};
+
+const updatePolishing = async (req, res) => {
+    const data = req.body;
+    const connection = await dbPool.getConnection();
+
+    try {
+        await connection.beginTransaction();
+        const isArray = Array.isArray(data);
+
+        const validateItem = (item) => {
+            return item.id && item.id_list_table && item.id_form && item.shift &&
+                item.group && item.output !== undefined && item.capacity_filling !== undefined &&
+                item.polishing_filter1 && item.polishing_filter2 && item.condition_filter &&
+                item.description !== undefined && item.pic !== undefined && item.standard;
+        };
+
+        if ((isArray && (data.length === 0 || data.some(item => !validateItem(item)))) ||
+            (!isArray && !validateItem(data))) {
+            throw new Error("Invalid input data");
+        }
+
+        if (isArray) {
+            await Promise.all(data.map(item =>
+                connection.execute(
+                    'UPDATE table_monitoring_polishing SET id_list_table = ?, id_form = ?, date = ?, shift = ?, group = ?, output = ?, capacity_filling = ?, polishing_filter1 = ?, polishing_filter2 = ?, condition_filter = ?, description = ?, pic = ?, standard = ? WHERE id = ?',
+                    [item.id_list_table, item.id_form, item.date || null, item.shift, item.group, item.output, item.capacity_filling, item.polishing_filter1, item.polishing_filter2, item.condition_filter, item.description, item.pic, item.standard, item.id]
+                )
+            ));
+            await connection.commit();
+            return successResponse(res, `${data.length} data polishing berhasil diperbarui`, data);
+        }
+
+        const [result] = await connection.execute(
+            'UPDATE table_monitoring_polishing SET id_list_table = ?, id_form = ?, date = ?, shift = ?, group = ?, output = ?, capacity_filling = ?, polishing_filter1 = ?, polishing_filter2 = ?, condition_filter = ?, description = ?, pic = ?, standard = ? WHERE id = ?',
+            [data.id_list_table, data.id_form, data.date || null, data.shift, data.group, data.output, data.capacity_filling, data.polishing_filter1, data.polishing_filter2, data.condition_filter, data.description, data.pic, data.standard, data.id]
+        );
+
+        if (result.affectedRows === 0) {
+            throw new Error("Not found");
+        }
+
+        await connection.commit();
+        return successResponse(res, `Polishing dengan ID ${data.id} berhasil diperbarui`, data);
+
+    } catch (error) {
+        await connection.rollback();
+        const errorMsg = error.message === "Not found"
+            ? `Polishing dengan ID ${data.id} tidak ditemukan`
+            : "Gagal memperbarui data polishing, semua perubahan dibatalkan";
+        return errorResponse(res, errorMsg, error, error.message === "Not found" ? 404 : 400);
+    } finally {
+        connection.release();
+    }
+};
+
+const deletePolishing = async (req, res) => {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+        return errorResponse(res, "Bad Request: Body harus berisi properti 'ids' dalam bentuk array dan tidak boleh kosong", null, 400);
+    }
+
+    return handleDatabaseOperation(
+        async () => {
+            const [result] = await dbPool.query('DELETE FROM table_monitoring_polishing WHERE id IN (?)', [ids]);
+            if (result.affectedRows === 0) {
+                return errorResponse(res, "Tidak ada data polishing yang cocok dengan ID yang diberikan untuk dihapus", null, 404);
+            }
+            return successResponse(res, `${result.affectedRows} data polishing berhasil dihapus`);
+        },
+        res,
+        "Terjadi kesalahan pada server saat menghapus data polishing"
+    );
+};
+
+// const getPolishingByListTable = (req, res) => {
+//     const { id_list_table } = req.params;
+
+//     return handleDatabaseOperation(
+//         async () => {
+//             const [data] = await dbPool.query('SELECT * FROM table_monitoring_polishing WHERE id_list_table = ?', [id_list_table]);
+//             return successResponse(res, "Data polishing berhasil diambil", data);
+//         },
+//         res,
+//         "Terjadi kesalahan pada server"
+//     );
+// };
+
+// const getPolishingByForm = (req, res) => {
+//     const { id_form } = req.params;
+
+//     return handleDatabaseOperation(
+//         async () => {
+//             const [data] = await dbPool.query('SELECT * FROM table_monitoring_polishing WHERE id_form = ?', [id_form]);
+//             return successResponse(res, "Data polishing berhasil diambil", data);
+//         },
+//         res,
+//         "Terjadi kesalahan pada server"
+//     );
+// };
+
+// const getPolishingByShift = (req, res) => {
+//     const { shift } = req.params;
+
+//     return handleDatabaseOperation(
+//         async () => {
+//             const [data] = await dbPool.query('SELECT * FROM table_monitoring_polishing WHERE shift = ?', [shift]);
+//             return successResponse(res, "Data polishing berhasil diambil", data);
+//         },
+//         res,
+//         "Terjadi kesalahan pada server"
+//     );
+// };
+
+// const getPolishingByGroup = (req, res) => {
+//     const { group } = req.params;
+
+//     return handleDatabaseOperation(
+//         async () => {
+//             const [data] = await dbPool.query('SELECT * FROM table_monitoring_polishing WHERE group = ?', [group]);
+//             return successResponse(res, "Data polishing berhasil diambil", data);
+//         },
+//         res,
+//         "Terjadi kesalahan pada server"
+//     );
+// };
+
+// const getPolishingByDate = (req, res) => {
+//     const { date } = req.params;
+
+//     return handleDatabaseOperation(
+//         async () => {
+//             const [data] = await dbPool.query('SELECT * FROM table_monitoring_polishing WHERE DATE(date) = ?', [date]);
+//             return successResponse(res, "Data polishing berhasil diambil", data);
+//         },
+//         res,
+//         "Terjadi kesalahan pada server"
+//     );
+// };
+
+module.exports = {
+    getAllPolishing,
+    getPolishingById,
+    createPolishing,
+    updatePolishing,
+    deletePolishing,
+    // getPolishingByListTable,
+    // getPolishingByForm,
+    // getPolishingByShift,
+    // getPolishingByGroup,
+    // getPolishingByDate
+};
